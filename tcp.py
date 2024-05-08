@@ -1,5 +1,14 @@
 import asyncio
-from tcputils import FLAGS_FIN, FLAGS_SYN, FLAGS_RST, FLAGS_ACK, calc_checksum, read_header
+from grader.tcputils import (
+    FLAGS_FIN,
+    FLAGS_SYN,
+    FLAGS_RST,
+    FLAGS_ACK,
+    calc_checksum,
+    read_header,
+    fix_checksum,
+    make_header,
+)
 
 class Servidor:
     def __init__(self, rede, porta):
@@ -16,12 +25,16 @@ class Servidor:
         """
         self.callback = callback
 
+    def retornar_servidor(self):
+        return self
+
     def _rdt_rcv(self, src_addr, dst_addr, segment):
         src_port, dst_port, seq_no, ack_no, flags, window_size, checksum, urg_ptr = read_header(segment)
 
         if dst_port != self.porta:
             # Ignora segmentos que não são destinados à porta do nosso servidor
             return
+
         if not self.rede.ignore_checksum and calc_checksum(segment, src_addr, dst_addr) != 0:
             print('descartando segmento com checksum incorreto')
             return
@@ -30,15 +43,20 @@ class Servidor:
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
 
         if (flags & FLAGS_SYN) == FLAGS_SYN:
-            # A flag SYN estar setada significa que é um cliente tentando estabelecer uma conexão nova
-            # TODO: talvez você precise passar mais coisas para o construtor de conexão
+
             flags += FLAGS_ACK
-            conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao)
-            self.rede.enviar(payload, 
-            # TODO: você precisa fazer o handshake aceitando a conexão. Escolha se você acha melhor
-            # fazer aqui mesmo ou dentro da classe Conexao.
+
+            servidor = self.retornar_servidor()
+            conexao = self.conexoes[id_conexao] = Conexao(servidor, id_conexao, seq_no)
+
+            ack_no = seq_no + 1
+
+            response_segment = fix_checksum(make_header(dst_port, src_port, seq_no, ack_no, flags), src_addr, dst_addr)
+
+            self.rede.enviar(response_segment, src_addr)
             if self.callback:
                 self.callback(conexao)
+
         elif id_conexao in self.conexoes:
             # Passa para a conexão adequada se ela já estiver estabelecida
             self.conexoes[id_conexao]._rdt_rcv(seq_no, ack_no, flags, payload)
@@ -50,11 +68,13 @@ class Servidor:
 class Conexao:
     # id_conexao = src_addr, src_port, dst_addr, dst_port
 
-    def __init__(self, servidor, id_conexao):
+    def __init__(self, servidor, id_conexao, seq_no):
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
         self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
+        self.seq_no = seq_no
+        self.ack_no = self.seq_no + 1
         #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
 
     def _exemplo_timer(self):
