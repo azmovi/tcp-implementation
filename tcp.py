@@ -47,7 +47,7 @@ class Servidor:
             flags += FLAGS_ACK
 
             servidor = self.retornar_servidor()
-            conexao = self.conexoes[id_conexao] = Conexao(servidor, id_conexao, seq_no)
+            conexao = self.conexoes[id_conexao] = Conexao(servidor, id_conexao, seq_no, ack_no)
 
             ack_no = seq_no + 1
 
@@ -67,13 +67,13 @@ class Servidor:
 class Conexao:
     # id_conexao = src_addr, src_port, dst_addr, dst_port
 
-    def __init__(self, servidor, id_conexao, seq_no):
+    def __init__(self, servidor, id_conexao, seq_no, ack_no):
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
         self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
         self.seq_no = seq_no
-        self.ack_no = self.seq_no + 1
+        self.ack_no = seq_no + 1
         #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
 
     def _exemplo_timer(self):
@@ -81,11 +81,22 @@ class Conexao:
         print('Este é um exemplo de como fazer um timer')
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
-        flags = FLAGS_ACK
-        ack_no += 1
-        print('recebido payload: %r' % payload)
+        if seq_no != self.ack_no:
+            return
 
-    # Os métodos abaixo fazem parte da API
+        self.att_ack_seq(payload)
+        self.callback(self, payload) 
+        self._enviar()
+
+    def att_ack_seq(self, payload):
+        self.seq_no = self.ack_no
+        self.ack_no += len(payload) 
+
+    def _enviar(self):
+        src_addr, src_port, dst_addr, dst_port = self.id_conexao
+        flags = FLAGS_ACK
+        newSegment = fix_checksum(make_header(dst_port, src_port, self.seq_no, self.ack_no, flags), src_addr, dst_addr)
+        self.servidor.rede.enviar(newSegment,src_addr)
 
     def registrar_recebedor(self, callback):
         """
