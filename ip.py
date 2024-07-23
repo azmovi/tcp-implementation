@@ -15,21 +15,25 @@ class IP:
     ignore_checksum = True
 
     def __init__(self):
-        self.fd = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+        self.fd = socket.socket(
+            socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP
+        )
         asyncio.get_event_loop().add_reader(self.fd, self.__raw_recv)
         self.callback = None
 
     def __handle_ipv4_header(packet):
         version = packet[0] >> 4
-        ihl = packet[0] & 0xf
+        ihl = packet[0] & 0xF
         assert version == 4
         src_addr = addr2str(packet[12:16])
         dst_addr = addr2str(packet[16:20])
-        segment = packet[4*ihl:]
+        segment = packet[4 * ihl :]
         return src_addr, dst_addr, segment
 
     def __raw_recv(self):
-        packet = self.fd.recv(12000)  # número suficientemente grande para a maioria dos protocolos de camada de enlace
+        packet = self.fd.recv(
+            12000
+        )  # número suficientemente grande para a maioria dos protocolos de camada de enlace
         src_addr, dst_addr, segment = IP.__handle_ipv4_header(packet)
 
         if self.callback:

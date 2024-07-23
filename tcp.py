@@ -7,8 +7,10 @@ from grader.tcputils import (
     calc_checksum,
     read_header,
     fix_checksum,
+    MSS,
     make_header,
 )
+
 
 class Servidor:
     def __init__(self, rede, porta):
@@ -29,29 +31,45 @@ class Servidor:
         return self
 
     def _rdt_rcv(self, src_addr, dst_addr, segment):
-        src_port, dst_port, seq_no, ack_no, flags, window_size, checksum, urg_ptr = read_header(segment)
+        (
+            src_port,
+            dst_port,
+            seq_no,
+            ack_no,
+            flags,
+            window_size,
+            checksum,
+            urg_ptr,
+        ) = read_header(segment)
 
         if dst_port != self.porta:
             # Ignora segmentos que não são destinados à porta do nosso servidor
             return
 
-        if not self.rede.ignore_checksum and calc_checksum(segment, src_addr, dst_addr) != 0:
+        if (
+            not self.rede.ignore_checksum
+            and calc_checksum(segment, src_addr, dst_addr) != 0
+        ):
             print('descartando segmento com checksum incorreto')
             return
 
-        payload = segment[4*(flags>>12):]
+        payload = segment[4 * (flags >> 12) :]
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
 
         if (flags & FLAGS_SYN) == FLAGS_SYN:
-
-            flags += FLAGS_ACK
-
-            servidor = self.retornar_servidor()
-            conexao = self.conexoes[id_conexao] = Conexao(servidor, id_conexao, seq_no, ack_no)
-
             ack_no = seq_no + 1
 
-            response_segment = fix_checksum(make_header(dst_port, src_port, seq_no, ack_no, flags), src_addr, dst_addr)
+            servidor = self.retornar_servidor()
+            conexao = self.conexoes[id_conexao] = Conexao(
+                servidor, id_conexao, seq_no, ack_no
+            )
+
+            flags += FLAGS_ACK
+            response_segment = fix_checksum(
+                make_header(dst_port, src_port, seq_no, ack_no, flags),
+                src_addr,
+                dst_addr,
+            )
 
             self.rede.enviar(response_segment, src_addr)
             if self.callback:
@@ -60,8 +78,10 @@ class Servidor:
         elif id_conexao in self.conexoes:
             self.conexoes[id_conexao]._rdt_rcv(seq_no, ack_no, flags, payload)
         else:
-            print('%s:%d -> %s:%d (pacote associado a conexão desconhecida)' %
-                  (src_addr, src_port, dst_addr, dst_port))
+            print(
+                '%s:%d -> %s:%d (pacote associado a conexão desconhecida)'
+                % (src_addr, src_port, dst_addr, dst_port)
+            )
 
 
 class Conexao:
@@ -71,10 +91,16 @@ class Conexao:
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
-        self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
+        self.timer = asyncio.get_event_loop().call_later(
+            1, self._exemplo_timer
+        )  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
         self.seq_no = seq_no
-        self.ack_no = seq_no + 1
-        #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
+        self.ack_no = ack_no
+        self.seq_client = ack_no
+        self.segmentos = {}
+        self.payloads = {}
+        self.mss = MSS
+        # self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
 
     def _exemplo_timer(self):
         # Esta função é só um exemplo e pode ser removida
@@ -84,19 +110,19 @@ class Conexao:
         if seq_no != self.ack_no:
             return
 
-        self.att_ack_seq(payload)
-        self.callback(self, payload) 
-        self._enviar()
-
-    def att_ack_seq(self, payload):
         self.seq_no = self.ack_no
-        self.ack_no += len(payload) 
+        self.ack_no += len(payload)
 
-    def _enviar(self):
+        self.callback(self, payload)
+
         src_addr, src_port, dst_addr, dst_port = self.id_conexao
         flags = FLAGS_ACK
-        newSegment = fix_checksum(make_header(dst_port, src_port, self.seq_no, self.ack_no, flags), src_addr, dst_addr)
-        self.servidor.rede.enviar(newSegment,src_addr)
+        newSegment = fix_checksum(
+            make_header(dst_port, src_port, self.seq_no, self.ack_no, flags),
+            src_addr,
+            dst_addr,
+        )
+        self.servidor.rede.enviar(newSegment, src_addr)
 
     def registrar_recebedor(self, callback):
         """
@@ -109,10 +135,23 @@ class Conexao:
         """
         Usado pela camada de aplicação para enviar dados
         """
-        # TODO: implemente aqui o envio de dados.
-        # Chame self.servidor.rede.enviar(segmento, dest_addr) para enviar o segmento
-        # que você construir para a camada de rede.
-        pass
+        i = 0
+        src_addr, src_port, dst_addr, dst_port = self.id_conexao
+        for qtd in range(0, len(dados), MSS):
+            payload = dados[i : i + MSS]
+            flags = FLAGS_ACK
+            newSegment = fix_checksum(
+                make_header(
+                    dst_port, src_port, self.seq_client, self.ack_no, flags
+                )
+                + payload,
+                src_addr,
+                dst_addr,
+            )
+
+            self.seq_client += len(payload)
+            self.servidor.rede.enviar(newSegment, src_addr)
+            i += MSS
 
     def fechar(self):
         """

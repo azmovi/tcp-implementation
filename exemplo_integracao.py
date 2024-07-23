@@ -12,14 +12,19 @@ import asyncio
 from ip import IP
 from tcp import Servidor
 
+
 def dados_recebidos(conexao, dados):
     if dados == b'':
         conexao.fechar()
     else:
         conexao.enviar(dados)   # envia de volta
 
+
 def conexao_aceita(conexao):
-    conexao.registrar_recebedor(dados_recebidos)   # usa esse mesmo recebedor para toda conexão aceita
+    conexao.registrar_recebedor(
+        dados_recebidos
+    )   # usa esse mesmo recebedor para toda conexão aceita
+
 
 rede = IP()
 servidor = Servidor(rede, 7000)
