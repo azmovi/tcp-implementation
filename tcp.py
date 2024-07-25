@@ -43,7 +43,6 @@ class Servidor:
         ) = read_header(segment)
 
         if dst_port != self.porta:
-            # Ignora segmentos que não são destinados à porta do nosso servidor
             return
 
         if (
@@ -58,13 +57,12 @@ class Servidor:
 
         if (flags & FLAGS_SYN) == FLAGS_SYN:
             ack_no = seq_no + 1
-
             servidor = self.retornar_servidor()
             conexao = self.conexoes[id_conexao] = Conexao(
                 servidor, id_conexao, seq_no, ack_no
             )
 
-            flags += FLAGS_ACK
+            flags = FLAGS_SYN + FLAGS_ACK
             response_segment = fix_checksum(
                 make_header(dst_port, src_port, seq_no, ack_no, flags),
                 src_addr,
@@ -97,9 +95,10 @@ class Conexao:
         self.seq_no = seq_no
         self.ack_no = ack_no
         self.seq_client = ack_no
-        self.segmentos = {}
+        self.segments = {}
         self.payloads = {}
-        self.mss = MSS
+        self.cwnd = MSS
+        self.rcv_cwnd = 0
         # self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
 
     def _exemplo_timer(self):
@@ -107,6 +106,21 @@ class Conexao:
         print('Este é um exemplo de como fazer um timer')
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
+        if self.payloads and ack_no > min(self.payloads.keys()):
+            y = min(self.payloads.keys())
+            while y < ack_no:
+                self.rcv_cwnd += len(self.segments[y])
+                del self.segments[y]
+                del self.payloads[y]
+                if not self.payloads:
+                    break
+                y = min(self.payloads.keys())
+            if self.rcv_cwnd >= self.cwnd or 0 == len(self.sent_data):
+                self.cwnd += MSS
+                self.rcv_cwnd = 0
+
+
+
         if seq_no != self.ack_no:
             return
 
@@ -149,9 +163,17 @@ class Conexao:
                 dst_addr,
             )
 
-            self.seq_client += len(payload)
             self.servidor.rede.enviar(newSegment, src_addr)
+            self.seq_client += len(payload)
+            self.payloads[self.seq_client] = payload
+            self.segments[self.seq_client] = newSegment
             i += MSS
+
+        cont = 0
+        for seg in self.segments.values():
+            if cont >= self.cwnd:
+                break
+            cont += len(seg)
 
     def fechar(self):
         """
